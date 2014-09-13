@@ -40,6 +40,7 @@
 #include <cutils/list.h>
 #include <cutils/misc.h>
 #include <cutils/uevent.h>
+#include <getopt.h>
 
 #ifdef CHARGER_ENABLE_SUSPEND
 #include <suspend/autosuspend.h>
@@ -86,6 +87,18 @@
 #endif
 
 #define SYS_POWER_STATE "/sys/power/state"
+
+static const struct option OPTIONS[] = {
+    { "mode", required_argument, NULL, 'm' },
+    { NULL, 0, NULL, 0 },
+};
+
+enum MODE {
+    NORMAL = 0,
+    QUICKBOOT,
+};
+
+int mode = NORMAL;
 
 struct key_state {
     bool pending;
@@ -689,12 +702,12 @@ static int draw_text(const char *str, int x, int y)
     return y + char_height;
 }
 
-static void android_green(void)
+static void android_blue(void)
 {
-    gr_color(0xa4, 0xc6, 0x39, 255);
+    gr_color(0, 191, 255, 255);
 }
 
-static void draw_capacity(struct charger *charger)
+static void draw_capacity(struct charger *charger, int y_start)
 {
     char cap_str[64];
     int x, y;
@@ -703,8 +716,9 @@ static void draw_capacity(struct charger *charger)
     snprintf(cap_str, sizeof(cap_str), "%d%%", charger->batt_anim->capacity);
     str_len_px = gr_measure(cap_str);
     x = (gr_fb_width() - str_len_px) / 2;
-    y = (gr_fb_height() + char_height) / 2;
-    android_green();
+    /*y = (gr_fb_height() + char_height) / 2;*/
+    y = y_start + 10;
+    android_blue();
     gr_text(x, y, cap_str, 0);
 }
 
@@ -726,29 +740,33 @@ static int draw_surface_centered(struct charger *charger, gr_surface surface)
     return y + h;
 }
 
-static void draw_unknown(struct charger *charger)
+static int draw_unknown(struct charger *charger)
 {
     int y;
     if (charger->surf_unknown) {
-        draw_surface_centered(charger, charger->surf_unknown);
+        y = draw_surface_centered(charger, charger->surf_unknown);
     } else {
-        android_green();
+        android_blue();
         y = draw_text("Charging!", -1, -1);
         draw_text("?\?/100", -1, y + 25);
     }
+    return y;
 }
 
-static void draw_battery(struct charger *charger)
+static int draw_battery(struct charger *charger)
 {
     struct animation *batt_anim = charger->batt_anim;
     struct frame *frame = &batt_anim->frames[batt_anim->cur_frame];
+    int y = 0;
 
     if (batt_anim->num_frames != 0) {
-        draw_surface_centered(charger, frame->surface);
+        y = draw_surface_centered(charger, frame->surface);
         LOGV("drawing frame #%d name=%s min_cap=%d time=%d\n",
              batt_anim->cur_frame, frame->name, frame->min_capacity,
              frame->disp_time);
     }
+
+    return y;
 }
 
 static void redraw_screen(struct charger *charger)
@@ -761,10 +779,11 @@ static void redraw_screen(struct charger *charger)
     if (batt_anim->capacity < 0 || batt_anim->num_frames == 0)
         draw_unknown(charger);
     else {
-        draw_battery(charger);
-        draw_capacity(charger);
+        int y = draw_battery(charger);
+        draw_capacity(charger, y);
     }
-    gr_flip();
+
+	gr_flip();
 }
 
 static void kick_animation(struct animation *anim)
@@ -795,8 +814,8 @@ static void update_screen_state(struct charger *charger, int64_t now)
     if (batt_anim->cur_cycle == batt_anim->num_cycles) {
         reset_animation(batt_anim);
         charger->next_screen_transition = -1;
-        gr_fb_blank(true);
         set_backlight(false);
+        gr_fb_blank(true);
 
 #ifdef ALLOW_SUSPEND_IN_CHARGER
         write_file(SYS_POWER_STATE, "mem", strlen("mem"));
@@ -955,8 +974,8 @@ static void process_key(struct charger *charger, int code, int64_t now)
                 } else {
                     reset_animation(batt_anim);
                     charger->next_screen_transition = -1;
-                    gr_fb_blank(true);
                     set_backlight(false);
+                    gr_fb_blank(true);
                     if (charger->num_supplies_online > 0)
                         request_suspend(true);
                 }
@@ -987,6 +1006,15 @@ static void handle_power_supply_state(struct charger *charger, int64_t now)
     if (charger->num_supplies_online == 0) {
         request_suspend(false);
         if (charger->next_pwr_check == -1) {
+            if (mode == QUICKBOOT) {
+                set_backlight(false);
+                gr_fb_blank(true);
+                request_suspend(true);
+                /* exit here. There is no need to keep running when charger
+                 * unplugged under QuickBoot mode
+                 */
+                exit(0);
+            }
             charger->next_pwr_check = now + UNPLUGGED_SHUTDOWN_TIME;
             LOGI("[%lld] device unplugged: shutting down in %lld (@ %lld)\n",
                  now, UNPLUGGED_SHUTDOWN_TIME, charger->next_pwr_check);
@@ -1251,7 +1279,23 @@ int main(int argc, char **argv)
 
     dump_last_kmsg();
 
-	alarm_thread_create();
+    int arg;
+    while ((arg=getopt_long(argc, argv,"m:" , OPTIONS, NULL))!=-1) {
+        switch (arg) {
+            case 'm':
+                mode = atoi(optarg);
+                break;
+            case '?':
+                LOGI("invalid argument\n");
+                continue;
+            default:
+                LOGI("nothing to do\n");
+                continue;
+        }
+    }
+
+    if (mode != QUICKBOOT)
+        alarm_thread_create();
 
     LOGI("--------------- STARTING CHARGER MODE ---------------\n");
 
@@ -1290,8 +1334,8 @@ int main(int argc, char **argv)
     ev_sync_key_state(set_key_callback, charger);
 
 #ifndef CHARGER_DISABLE_INIT_BLANK
-    gr_fb_blank(true);
     set_backlight(false);
+    gr_fb_blank(true);
 #endif
 
     charger->next_screen_transition = now - 1;
