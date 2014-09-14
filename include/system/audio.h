@@ -125,9 +125,7 @@ typedef enum {
     AUDIO_FORMAT_PCM_SUB_8_BIT           = 0x2, /* DO NOT CHANGE - PCM unsigned 8 bits */
     AUDIO_FORMAT_PCM_SUB_32_BIT          = 0x3, /* PCM signed .31 fixed point */
     AUDIO_FORMAT_PCM_SUB_8_24_BIT        = 0x4, /* PCM signed 7.24 fixed point */
-#ifdef QCOM_HARDWARE
     AUDIO_FORMAT_PCM_SUB_24_BIT          = 0x5, /* PCM signed 24 fixed point */
-#endif
 } audio_format_pcm_sub_fmt_t;
 
 /* MP3 sub format field definition : can use 11 LSBs in the same way as MP3
@@ -199,8 +197,9 @@ typedef enum {
     AUDIO_FORMAT_AMR_WB_PLUS         = 0x14000000UL,
     AUDIO_FORMAT_MP2                 = 0x15000000UL,
     AUDIO_FORMAT_EVRCNW              = 0x16000000UL,
-    AUDIO_FORMAT_PCM_OFFLOAD         = 0x17000000UL,
+    AUDIO_FORMAT_FLAC                = 0x18000000UL,
 #endif
+    AUDIO_FORMAT_PCM_OFFLOAD         = 0x17000000UL,
     AUDIO_FORMAT_MAIN_MASK           = 0xFF000000UL,
     AUDIO_FORMAT_SUB_MASK            = 0x00FFFFFFUL,
 
@@ -213,20 +212,19 @@ typedef enum {
                                         AUDIO_FORMAT_PCM_SUB_32_BIT),
     AUDIO_FORMAT_PCM_8_24_BIT        = (AUDIO_FORMAT_PCM |
                                         AUDIO_FORMAT_PCM_SUB_8_24_BIT),
-#ifdef QCOM_HARDWARE
     AUDIO_FORMAT_PCM_24_BIT          = (AUDIO_FORMAT_PCM |
                                           AUDIO_FORMAT_PCM_SUB_24_BIT),
+#ifdef QCOM_HARDWARE
     AUDIO_FORMAT_AC3_DM              =  (AUDIO_FORMAT_AC3 |
                                           AUDIO_FORMAT_DOLBY_SUB_DM),
     AUDIO_FORMAT_EAC3_DM             =  (AUDIO_FORMAT_EAC3 |
                                           AUDIO_FORMAT_DOLBY_SUB_DM),
-
+#endif
     /*Offload PCM formats*/
     AUDIO_FORMAT_PCM_16_BIT_OFFLOAD  = (AUDIO_FORMAT_PCM_OFFLOAD |
                                         AUDIO_FORMAT_PCM_SUB_16_BIT),
     AUDIO_FORMAT_PCM_24_BIT_OFFLOAD  = (AUDIO_FORMAT_PCM_OFFLOAD |
                                         AUDIO_FORMAT_PCM_SUB_8_24_BIT),
-#endif
 } audio_format_t;
 
 enum {
@@ -589,6 +587,7 @@ typedef struct {
     int64_t duration_us;                // duration in microseconds, -1 if unknown
     bool has_video;                     // true if stream is tied to a video stream
     bool is_streaming;                  // true if streaming, false if local playback
+    uint16_t bit_width;                 // bits per sample
 } audio_offload_info_t;
 
 #define AUDIO_MAKE_OFFLOAD_INFO_VERSION(maj,min) \
@@ -758,6 +757,12 @@ static inline bool audio_is_valid_format(audio_format_t format)
     case AUDIO_FORMAT_HE_AAC_V2:
     case AUDIO_FORMAT_VORBIS:
         return true;
+    case AUDIO_FORMAT_PCM_OFFLOAD:
+        if (format != AUDIO_FORMAT_PCM_16_BIT_OFFLOAD &&
+                format != AUDIO_FORMAT_PCM_24_BIT_OFFLOAD) {
+            return false;
+        }
+        return true;
 #ifdef QCOM_HARDWARE
     case AUDIO_FORMAT_QCELP:
     case AUDIO_FORMAT_EVRC:
@@ -773,12 +778,7 @@ static inline bool audio_is_valid_format(audio_format_t format)
     case AUDIO_FORMAT_AMR_WB_PLUS:
     case AUDIO_FORMAT_MP2:
     case AUDIO_FORMAT_EVRCNW:
-        return true;
-    case AUDIO_FORMAT_PCM_OFFLOAD:
-        if (format != AUDIO_FORMAT_PCM_16_BIT_OFFLOAD &&
-                format != AUDIO_FORMAT_PCM_24_BIT_OFFLOAD) {
-            return false;
-        }
+    case AUDIO_FORMAT_FLAC:
         return true;
 #endif
     default:
@@ -791,12 +791,12 @@ static inline bool audio_is_linear_pcm(audio_format_t format)
     return ((format & AUDIO_FORMAT_MAIN_MASK) == AUDIO_FORMAT_PCM);
 }
 
-#ifdef QCOM_HARDWARE
 static inline bool audio_is_offload_pcm(audio_format_t format)
 {
     return ((format & AUDIO_FORMAT_MAIN_MASK) == AUDIO_FORMAT_PCM_OFFLOAD);
 }
 
+#ifdef QCOM_HARDWARE
 static inline bool audio_is_supported_compressed(audio_format_t format)
 {
     if (format == AUDIO_FORMAT_AMR_NB ||
